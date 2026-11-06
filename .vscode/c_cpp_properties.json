@@ -1,0 +1,50 @@
+//
+// !!! WARNING !!! AUTO-GENERATED FILE!
+// PLEASE DO NOT MODIFY IT AND USE "platformio.ini":
+// https://docs.platformio.org/page/projectconf/section_env_build.html#build-flags
+//
+{
+    "configurations": [
+        {
+            "name": "PlatformIO",
+            "includePath": [
+                "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/src",
+                "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/.pio/libdeps/native/PID",
+                "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante",
+                "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/test/support",
+                "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/.pio/libdeps/native/googletest",
+                "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/.pio/libdeps/native/googletest/googlemock",
+                "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/.pio/libdeps/native/googletest/googlemock/include",
+                "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/.pio/libdeps/native/googletest/googletest",
+                "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/.pio/libdeps/native/googletest/googletest/include",
+                ""
+            ],
+            "browse": {
+                "limitSymbolsToIncludedHeaders": true,
+                "path": [
+                    "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/src",
+                    "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/.pio/libdeps/native/PID",
+                    "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante",
+                    "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/test/support",
+                    "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/.pio/libdeps/native/googletest",
+                    "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/.pio/libdeps/native/googletest/googlemock",
+                    "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/.pio/libdeps/native/googletest/googlemock/include",
+                    "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/.pio/libdeps/native/googletest/googletest",
+                    "C:/Users/Timeo/OneDrive/Documents/OneDrive/Documents/maison/robotique/2026-2027/base_roulante/.pio/libdeps/native/googletest/googletest/include",
+                    ""
+                ]
+            },
+            "defines": [
+                "PLATFORMIO=60200",
+                "ARDUINO=100",
+                ""
+            ],
+            "cppStandard": "gnu++17",
+            "compilerPath": "gcc",
+            "compilerArgs": [
+                ""
+            ]
+        }
+    ],
+    "version": 4
+}

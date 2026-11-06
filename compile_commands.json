@@ -1,0 +1,8 @@
+[
+    {
+        "command": "g++ -o .pio\\build\\native\\lib955\\PID\\PID_v1.o -c -std=gnu++17 -DPLATFORMIO=60200 -DARDUINO=100 -I.pio\\libdeps\\native\\PID -I. -Itest\\support .pio\\libdeps\\native\\PID\\PID_v1.cpp",
+        "directory": "C:\\Users\\Timeo\\OneDrive\\Documents\\OneDrive\\Documents\\maison\\robotique\\2026-2027\\base_roulante",
+        "file": ".pio\\libdeps\\native\\PID\\PID_v1.cpp",
+        "output": ".pio\\build\\native\\lib955\\PID\\PID_v1.o"
+    }
+]
