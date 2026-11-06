@@ -5,9 +5,6 @@
 // seulement les consignes envoyées. Les valeurs attendues sont déduites de la chaîne de calcul du .ino
 // elle-même (ajustement_consigne + calcule_consignes_moteurs) : les réglages (progressivité, rayons,
 // gains PID...) peuvent donc évoluer sans casser ces tests.
-//
-// Les tests marqués « ComportementActuel » décrivent un comportement qui va volontairement changer
-// (ex. : pas de freinage actif en roue libre). Ils sont censés échouer le jour où on le modifie.
 #include <PID_v1.h>  // inclus ici pour que PlatformIO détecte la dépendance (il ne lit pas les #include du .ino)
 #include <PinChangeInterrupt.h>
 #include <ServoInput.h>
@@ -268,23 +265,39 @@ TEST_F(BaseRoulanteTest, RelachementDesManches_LaPuissanceRetombeEtLaRoueRalenti
   verifier_commandes_dans_les_bornes();
 }
 
-TEST_F(BaseRoulanteTest, ComportementActuel_RelachementDesManches_LeSensBasculeAlorsQueLaCommandeNEstPasRetombee) {
-  // Constat sur le firmware actuel : set_ConsigneVitesse(0) met la broche de sens au niveau « consigne
-  // négative » (consigne > 0 est faux), alors que la sortie du PID, bornée à [0, 255], ne retombe que
-  // progressivement (terme intégral résiduel). Pendant ce temps le moteur est donc alimenté à
-  // contresens : ce n'est ni de la roue libre franche, ni un freinage voulu.
-  // A REVOIR avec le comportement de roue libre / freinage : ce test devra alors échouer / être remplacé.
-  piloter(Pulses{1570, PULSE_NEUTRE, PULSE_NEUTRE});
+TEST_F(BaseRoulanteTest, RelachementDesManches_ImpulsionDeFreinageInverseRalentitLesRoues) {
+  // setup() active le freinage par impulsion inverse : au relâchement, la broche de sens bascule pendant
+  // une courte impulsion de PWM, puis la commande retombe à 0 et la roue est largement ralentie, sans
+  // repartir franchement à l'envers. Pleine manche pour que la vitesse soit assez grande par rapport à
+  // FREINAGE_VITESSE_REFERENCE.
+  piloter(Pulses{PULSE_MAXIMUM, PULSE_NEUTRE, PULSE_NEUTRE});
   regler_moteurs_pour(consignes_attendues());
-  executer_ms(10000);
+  executer_ms(8000);
+  const double vitesse_initiale = gauche.vitesse();
+  ASSERT_GT(vitesse_initiale, 10 * FREINAGE_VITESSE_MINIMUM) << "le moteur doit tourner avant le relâchement";
   const int sens_avant = etat.numerique[PIN_SENS_MOTEUR_GAUCHE];
-  ASSERT_GT(pwm(PIN_VITESSE_MOTEUR_GAUCHE), 0) << "le moteur doit être alimenté avant le relâchement";
 
   piloter(Pulses{});
   pas();
+  EXPECT_NE(etat.numerique[PIN_SENS_MOTEUR_GAUCHE], sens_avant) << "l'impulsion doit être de sens opposé";
+  EXPECT_GT(pwm(PIN_VITESSE_MOTEUR_GAUCHE), 0);
 
-  EXPECT_NE(etat.numerique[PIN_SENS_MOTEUR_GAUCHE], sens_avant) << "le sens a basculé";
-  EXPECT_GT(pwm(PIN_VITESSE_MOTEUR_GAUCHE), 0) << "la commande n'est pas encore retombée";
+  int duree_ms = 1;
+  double vitesse_min = gauche.vitesse();
+  while (pwm(PIN_VITESSE_MOTEUR_GAUCHE) > 0 && duree_ms < 1000) {
+    pas();
+    ++duree_ms;
+    vitesse_min = std::min(vitesse_min, gauche.vitesse());
+  }
+  EXPECT_LE(duree_ms * 1000.0, FREINAGE_DUREE_MAX + 2000) << "durée de l'impulsion";
+  EXPECT_LT(gauche.vitesse(), 0.5 * vitesse_initiale) << "la roue doit être largement ralentie";
+  EXPECT_GT(vitesse_min, -0.25 * vitesse_initiale) << "la roue ne doit pas repartir franchement à l'envers";
+
+  executer_ms(2000);
+  EXPECT_EQ(pwm(PIN_VITESSE_MOTEUR_DROIT), 0);
+  EXPECT_EQ(pwm(PIN_VITESSE_MOTEUR_GAUCHE), 0);
+  EXPECT_EQ(pwm(PIN_VITESSE_MOTEUR_ARRIERE), 0);
+  verifier_commandes_dans_les_bornes();
 }
 
 }  // namespace

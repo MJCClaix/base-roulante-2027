@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Nature du projet
 
-Firmware Arduino (C++) pour une base roulante holonome à 3 roues motorisées (2027). Il n'y a ni système de build, ni linter, ni suite de tests dans le dépôt : le code se compile et se téléverse depuis l'IDE Arduino (ou un outil équivalent, non configuré ici). Le matériel visé est un shield moteur L298P KeyStudio ; les broches A0/A1 utilisées pour les codeurs indiquent une carte de type Arduino Uno/Nano (non vérifié dans le dépôt).
+Firmware Arduino (C++) pour une base roulante holonome à 3 roues motorisées (2027). Le firmware se compile et se téléverse depuis l'IDE Arduino (pas de build ni de linter dans le dépôt). Des tests tournent sur PC avec PlatformIO (environnement `native`, googletest/googlemock), voir la section Commandes. Le matériel visé est un shield moteur L298P KeyStudio ; les broches A0/A1 utilisées pour les codeurs indiquent une carte de type Arduino Uno/Nano (non vérifié dans le dépôt).
 
 Bibliothèques externes requises (à installer dans l'IDE, non versionnées ici) :
 - `PinChangeInterrupt` (interruptions sur broches quelconques, `attachPinChangeInterrupt`)
@@ -16,7 +16,14 @@ Les commentaires et les noms de variables sont en français : conserver cette co
 ## Commandes
 
 - Compilation / téléversement : via l'IDE Arduino ouvrant `BaseMoteurHolonome.ino` (le `.h` doit être dans le même dossier).
-- Tests, lint : aucun n'existe. Ne pas en inventer ; la vérification se fait sur le matériel (moniteur série à 115200 bauds, `DEBUG true`).
+- Tests : `pio test -e native` (installation : `setup_tests.ps1`). Trois suites dans `test/` : `test_cinematique`, `test_pilotage_moteur`, `test_bout_a_bout`. Les faux Arduino / ServoInput / PinChangeInterrupt et le moteur simulé sont dans `test/support/`.
+- Lint : aucun. La vérification finale se fait sur le matériel (moniteur série à 115200 bauds, `DEBUG true`).
+
+## Règles de travail
+
+- **Tests** : à chaque fin d'ajout ou de modification de code, lancer `pio test -e native` (toutes les suites) et rapporter le résultat, sauf mention contraire de l'utilisateur.
+- Les tests vérifient des propriétés (bornes, symétries, convergence), pas des valeurs liées aux réglages, pour ne pas bloquer les évolutions du comportement. Les tests nommés `ComportementActuel_*` décrivent un comportement destiné à changer.
+- Conserver les fins de ligne CRLF de `BaseMoteurHolonome.ino` et `PilotageMoteur.h`.
 
 ## Architecture
 
@@ -33,6 +40,7 @@ Deux fichiers, un seul flux d'exécution :
   - `get_VitesseRotation()` convertit cette durée en tours/s (le rapport de réduction `11` est codé en dur, dans la macro et dans la méthode).
   - `execute()` mesure la vitesse, appelle le PID (échantillonnage 20 ms, sortie bornée 0–255) et écrit la commande PWM ; une sortie série périodique est possible en mode debug.
   - `set_ConsigneVitesse()` prend le signe de la consigne pour piloter la broche de sens, avec inversion possible via `set_InverseSensMoteur()`.
+  - **Freinage par impulsion inverse** (`set_FreinageInverse()`, activé dans `setup()`) : quand la consigne passe à 0, `execute()` envoie une impulsion PWM de sens opposé, de force et durée proportionnelles à la vitesse mesurée (constantes `FREINAGE_*`, à régler sur le robot), le PID étant en manuel pendant l'impulsion. Une consigne nulle ne bascule alors plus la broche de sens. Le sens de rotation est supposé égal à celui de la dernière consigne non nulle.
 
 - **Mapping matériel** : les trois moteurs, leurs broches de vitesse/sens (shield L298P) et leurs codeurs sont définis par `#define` en tête du `.ino`. L'inversion du sens de rotation est fixée dans `setup()` (le moteur gauche et le droit sont inversés, l'arrière non).
 

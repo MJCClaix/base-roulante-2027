@@ -11,6 +11,16 @@
 #define TIMEOUT_CODEUR_MOTEURS    10000
 // Periode d'écriture sur la liaison série en mode debug (µs)
 #define PERIODE_ECRITURE_LS 20000
+// Freinage par impulsion inverse (a regler sur le robot). La force et la durée de l'impulsion sont
+// proportionnelles à la vitesse mesurée quand la consigne passe à 0, jusqu'à FREINAGE_VITESSE_REFERENCE.
+// Vitesse (unité de get_VitesseRotation) en dessous de laquelle on ne freine pas.
+#define FREINAGE_VITESSE_MINIMUM    1.0
+// Vitesse (unité de get_VitesseRotation) à partir de laquelle l'impulsion est maximale.
+#define FREINAGE_VITESSE_REFERENCE  255.0
+// Commande PWM maximale de l'impulsion de freinage (0-255).
+#define FREINAGE_COMMANDE_MAX       255
+// Durée maximale de l'impulsion de freinage (µs).
+#define FREINAGE_DUREE_MAX          50000
 
 //--------------------------------------------------------------------------------------------------------------------
 template <int pinCodeur> class PilotageMoteur {
@@ -25,11 +35,20 @@ template <int pinCodeur> class PilotageMoteur {
 
     void set_DebugMode(bool debugMode) { m_debug_mode = debugMode; }
     void set_InverseSensMoteur(bool inverseSensMoteur) { m_InverseSensMoteur = inverseSensMoteur; }
+    void set_FreinageInverse(bool freinageInverse) { m_FreinageInverse = freinageInverse; }
 
   private:
     int8_t m_PinVitesseMoteur;
     int8_t m_PinSensMoteur;
     bool m_InverseSensMoteur = false;
+
+    bool m_FreinageInverse = false;
+    bool m_DemandeFreinage = false;
+    bool m_EnFreinage = false;
+    bool m_SensRotation = true;   // sens de la dernière consigne non nulle
+    int m_CommandeFreinage = 0;
+    unsigned long m_DateDebutFreinage = 0;
+    unsigned long m_DureeFreinage = 0;
 
     static int             m_Compteur_impulsions_codeur;
     static unsigned long   m_Duree_impulsion_codeur;
@@ -52,6 +71,8 @@ template <int pinCodeur> class PilotageMoteur {
     unsigned long m_DateEcritureLiaisonSerie = 0;
 
     static void routineInterruptionCodeur(void);
+    void demarreFreinage(void);
+    void termineFreinage(void);
 };
 
 //--------------------------------------------------------------------------------------------------------------------
@@ -97,8 +118,19 @@ void PilotageMoteur<pinCodeur>::set_ParametresPID(float kp, float ki, float kd) 
 //****************************************************************************
 template <int pinCodeur> 
 void PilotageMoteur<pinCodeur>::set_ConsigneVitesse(float consigne) {
+  if (consigne != 0) {
+    m_SensRotation = (consigne > 0);
+    m_DemandeFreinage = false;
+    if (m_EnFreinage)
+      termineFreinage();
+  }
+  else if (m_ConsigneVitesseMoteur != 0)
+    m_DemandeFreinage = true;
   m_ConsigneVitesseMoteur = abs(consigne);
-  digitalWrite(m_PinSensMoteur, (consigne > 0) != m_InverseSensMoteur);
+  // Avec le freinage inverse, une consigne nulle ne change pas le sens : l'impulsion de freinage doit
+  // aller à l'opposé du sens de rotation.
+  if (!m_FreinageInverse || (consigne != 0))
+    digitalWrite(m_PinSensMoteur, (consigne > 0) != m_InverseSensMoteur);
 }
 //**************************************************************************
 template <int pinCodeur> 
@@ -111,8 +143,19 @@ double PilotageMoteur<pinCodeur>::get_VitesseRotation() {
 template <int pinCodeur> 
 void PilotageMoteur<pinCodeur>::execute() {
   m_VitesseMoteurMesuree = get_VitesseRotation();
-  PID_moteur.Compute();
-  analogWrite(m_PinVitesseMoteur, m_CommandeMoteur);
+  if (m_DemandeFreinage) {
+    m_DemandeFreinage = false;
+    if (m_FreinageInverse)
+      demarreFreinage();
+  }
+  if (m_EnFreinage && ((micros() - m_DateDebutFreinage) >= m_DureeFreinage))
+    termineFreinage();
+  if (m_EnFreinage)
+    analogWrite(m_PinVitesseMoteur, m_CommandeFreinage);
+  else {
+    PID_moteur.Compute();
+    analogWrite(m_PinVitesseMoteur, m_CommandeMoteur);
+  }
   if (m_debug_mode) {
     unsigned long date_courante = micros();
     if ((date_courante - m_DateEcritureLiaisonSerie) > PERIODE_ECRITURE_LS) {
@@ -140,6 +183,29 @@ void PilotageMoteur<pinCodeur>::routineInterruptionCodeur(void) {
     m_Date_derniere_impulsion_codeur = date_courante;
     m_Compteur_impulsions_codeur = 0;
   }
+}
+//**********************************************************************
+template <int pinCodeur>
+void PilotageMoteur<pinCodeur>::demarreFreinage(void) {
+  // Le codeur ne donne pas le sens : on suppose que le moteur tourne dans le sens de la dernière consigne.
+  if (m_VitesseMoteurMesuree < FREINAGE_VITESSE_MINIMUM)
+    return;
+  double ratio = min(m_VitesseMoteurMesuree / FREINAGE_VITESSE_REFERENCE, 1.0);
+  m_CommandeFreinage = FREINAGE_COMMANDE_MAX * ratio;
+  m_DureeFreinage = FREINAGE_DUREE_MAX * ratio;
+  m_DateDebutFreinage = micros();
+  m_EnFreinage = true;
+  PID_moteur.SetMode(MANUAL);
+  // Impulsion dans le sens opposé à la rotation
+  digitalWrite(m_PinSensMoteur, m_SensRotation == m_InverseSensMoteur);
+}
+//**********************************************************************
+template <int pinCodeur>
+void PilotageMoteur<pinCodeur>::termineFreinage(void) {
+  m_EnFreinage = false;
+  m_CommandeMoteur = 0;
+  // Le passage en automatique initialise le PID a partir de la commande (terme intégral remis à 0)
+  PID_moteur.SetMode(AUTOMATIC);
 }
 //**********************************************************************************************
 #endif // #ifndef PilotageMoteur_h

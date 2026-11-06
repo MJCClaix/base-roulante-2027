@@ -160,6 +160,10 @@ void setup() {
   moteur_droit.set_InverseSensMoteur(true);
   //moteur_arriere.set_InverseSensMoteur(true);
 
+  moteur_droit.set_FreinageInverse(true);
+  moteur_gauche.set_FreinageInverse(true);
+  moteur_arriere.set_FreinageInverse(true);
+
   if (DEBUG) Serial.println("Initialisation OK !");
 }
 
