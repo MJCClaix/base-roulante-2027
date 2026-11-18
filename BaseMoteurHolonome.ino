@@ -112,10 +112,23 @@ void calcule_consignes_moteurs(
 
 //--------------------------------------------------------------------------------------------------------------------
 
-void set_vitesse(int vitesse_moteur_droit, int vitesse_moteur_gauche, int vitesse_moteur_arriere) {
+bool base_immobile_precedente = true;
+
+void set_vitesse(float vitesse_moteur_droit, float vitesse_moteur_gauche, float vitesse_moteur_arriere) {
+  // Le freinage n'est demandé que lorsque toute la base s'arrête. Une roue dont la consigne est nulle
+  // pendant un déplacement (ex. roue arrière en translation) roule librement, elle n'est pas freinée.
+  const bool base_immobile = (vitesse_moteur_droit == 0 && vitesse_moteur_gauche == 0 && vitesse_moteur_arriere == 0);
+
   moteur_droit.set_ConsigneVitesse(vitesse_moteur_droit);
   moteur_gauche.set_ConsigneVitesse(vitesse_moteur_gauche);
   moteur_arriere.set_ConsigneVitesse(vitesse_moteur_arriere);
+
+  if (base_immobile && !base_immobile_precedente) {
+    moteur_droit.demande_freinage();
+    moteur_gauche.demande_freinage();
+    moteur_arriere.demande_freinage();
+  }
+  base_immobile_precedente = base_immobile;
 
   moteur_droit.execute();
   moteur_gauche.execute();

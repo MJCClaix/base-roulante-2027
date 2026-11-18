@@ -300,6 +300,36 @@ TEST_F(BaseRoulanteTest, RelachementDesManches_ImpulsionDeFreinageInverseRalenti
   verifier_commandes_dans_les_bornes();
 }
 
+TEST_F(BaseRoulanteTest, PetiteCommandeNonNulle_PasDeFreinageSurLesRoues) {
+  // Commande latérale très faible (consigne < 1 unité) : elle est non nulle, donc ne doit pas être prise
+  // pour un arrêt (sinon freinage parasite alors que l'utilisateur pousse encore la manche).
+  piloter(Pulses{PULSE_NEUTRE, 1700, PULSE_NEUTRE});
+  regler_moteurs_pour(consignes_attendues());
+  executer_ms(3000);
+  const int sens_avant = etat.numerique[PIN_SENS_MOTEUR_DROIT];
+
+  piloter(Pulses{PULSE_NEUTRE, 1535, PULSE_NEUTRE});
+  ASSERT_NE(consignes_attendues().droit, 0.0f) << "la consigne doit être non nulle pour ce test";
+  executer_ms(300);
+  EXPECT_EQ(etat.numerique[PIN_SENS_MOTEUR_DROIT], sens_avant) << "pas de freinage (sens inversé)";
+  verifier_commandes_dans_les_bornes();
+}
+
+TEST_F(BaseRoulanteTest, ChangementDeManoeuvre_LaRoueArriereNeFreinePasQuandSaConsigneTombeAZero) {
+  // Rotation pure : la roue arrière tourne. Translation avant : sa consigne tombe à 0 alors qu'elle tourne
+  // encore, mais c'est normal (roue non commandée), pas un arrêt de la base : aucun freinage.
+  piloter(Pulses{PULSE_NEUTRE, PULSE_NEUTRE, 1700});
+  regler_moteurs_pour(consignes_attendues());
+  executer_ms(3000);
+  const int sens_avant = etat.numerique[PIN_SENS_MOTEUR_ARRIERE];
+
+  piloter(Pulses{1700, PULSE_NEUTRE, PULSE_NEUTRE});
+  ASSERT_EQ(consignes_attendues().arriere, 0.0f) << "la consigne arrière doit être nulle pour ce test";
+  executer_ms(300);
+  EXPECT_EQ(etat.numerique[PIN_SENS_MOTEUR_ARRIERE], sens_avant) << "la roue arrière ne doit pas être freinée";
+  verifier_commandes_dans_les_bornes();
+}
+
 }  // namespace
 
 #include "lanceur_gtest.h"

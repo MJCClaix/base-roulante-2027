@@ -253,6 +253,7 @@ class FreinageTest : public PilotageMoteurTest, public ::testing::WithParamInter
     m.set_ConsigneVitesse(CONSIGNE_FREINAGE);
     executer_ms(5000);
     m.set_ConsigneVitesse(0);
+    m.demande_freinage();
     executer_ms(100);
     return std::fabs(physique.vitesse());
   }
@@ -272,6 +273,7 @@ TEST_P(FreinageTest, ImpulsionInverseBorneePuisArretSansRepartirALEnvers) {
   ASSERT_GT(vitesse_initiale, 10 * FREINAGE_VITESSE_MINIMUM) << "le moteur doit tourner avant le relâchement";
 
   m.set_ConsigneVitesse(0);
+  m.demande_freinage();
   pas();
   EXPECT_NE(arduino_fake::etat.numerique[PIN_SENS], sens_avant) << "l'impulsion doit être de sens opposé";
   EXPECT_GT(derniere_commande(), 0);
@@ -319,6 +321,7 @@ TEST_F(FreinageTest, SousLaVitesseMinimum_AucuneImpulsion) {
   const int sens_avant = arduino_fake::etat.numerique[PIN_SENS];
 
   m.set_ConsigneVitesse(0);
+  m.demande_freinage();
   pas();
   EXPECT_EQ(arduino_fake::etat.numerique[PIN_SENS], sens_avant);
 }
@@ -333,6 +336,7 @@ TEST_F(FreinageTest, NouvelleConsignePendantLImpulsion_LaRegulationReprend) {
   const int sens_avant = arduino_fake::etat.numerique[PIN_SENS];
 
   m.set_ConsigneVitesse(0);
+  m.demande_freinage();
   pas();
   ASSERT_NE(arduino_fake::etat.numerique[PIN_SENS], sens_avant) << "l'impulsion doit avoir démarré";
 
@@ -340,6 +344,50 @@ TEST_F(FreinageTest, NouvelleConsignePendantLImpulsion_LaRegulationReprend) {
   executer_ms(10000);
   EXPECT_EQ(arduino_fake::etat.numerique[PIN_SENS], sens_avant);
   EXPECT_NEAR(physique.vitesse(), CONSIGNE_FREINAGE, 0.1 * CONSIGNE_FREINAGE);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Consigne nulle : le freinage n'a lieu que si on le demande, et une consigne nulle ne laisse aucun
+// reste de commande (terme intégral du PID).
+
+TEST_F(FreinageTest, ConsigneNulleSansDemandeDeFreinage_AucuneImpulsionNiChangementDeSens) {
+  Moteur& m = creer_moteur();
+  m.set_FreinageInverse(true);
+  simulation::MoteurSimule physique(PIN_PWM, PIN_SENS, PIN_CODEUR, +1, VITESSE_MAX_FREINAGE);
+  moteur_physique = &physique;
+  m.set_ConsigneVitesse(CONSIGNE_FREINAGE);
+  executer_ms(5000);
+  const int sens_avant = arduino_fake::etat.numerique[PIN_SENS];
+
+  m.set_ConsigneVitesse(0);
+  executer_ms(200);
+  EXPECT_EQ(arduino_fake::etat.numerique[PIN_SENS], sens_avant);
+}
+
+TEST_F(FreinageTest, CommandeCoupee_LaCommandeTombeATutSansResteDIntegrale) {
+  Moteur& m = creer_moteur();
+  m.set_ConsigneVitesse(255);
+  executer_ms(5000);  // moteur non simulé : la mesure reste proche de 0, le terme intégral se charge
+  ASSERT_EQ(derniere_commande(), 255);
+
+  m.set_ConsigneVitesse(0);
+  pas();
+  EXPECT_EQ(derniere_commande(), 0);
+}
+
+TEST_F(FreinageTest, RoueArretee_PasDeFreinageMemeSiLaDemandeArrive) {
+  // La roue est à l'arrêt : plus aucune impulsion du codeur, la dernière mesure de vitesse est périmée.
+  Moteur& m = creer_moteur();
+  m.set_FreinageInverse(true);
+  simulation::imposer_vitesse_mesuree(PIN_CODEUR, 5.0, NB_PULSES_CODEUR_MOTEURS);
+  executer_ms(3000);
+  const int sens_avant = arduino_fake::etat.numerique[PIN_SENS];
+
+  m.set_ConsigneVitesse(0);
+  m.demande_freinage();
+  pas();
+  EXPECT_EQ(arduino_fake::etat.numerique[PIN_SENS], sens_avant);
+  EXPECT_EQ(derniere_commande(), 0);
 }
 
 }  // namespace

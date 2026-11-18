@@ -36,6 +36,7 @@ template <int pinCodeur> class PilotageMoteur {
     void set_DebugMode(bool debugMode) { m_debug_mode = debugMode; }
     void set_InverseSensMoteur(bool inverseSensMoteur) { m_InverseSensMoteur = inverseSensMoteur; }
     void set_FreinageInverse(bool freinageInverse) { m_FreinageInverse = freinageInverse; }
+    void demande_freinage(void) { m_DemandeFreinage = true; }
 
   private:
     int8_t m_PinVitesseMoteur;
@@ -73,6 +74,7 @@ template <int pinCodeur> class PilotageMoteur {
     static void routineInterruptionCodeur(void);
     void demarreFreinage(void);
     void termineFreinage(void);
+    void reinitialisePID(void);
 };
 
 //--------------------------------------------------------------------------------------------------------------------
@@ -124,8 +126,6 @@ void PilotageMoteur<pinCodeur>::set_ConsigneVitesse(float consigne) {
     if (m_EnFreinage)
       termineFreinage();
   }
-  else if (m_ConsigneVitesseMoteur != 0)
-    m_DemandeFreinage = true;
   m_ConsigneVitesseMoteur = abs(consigne);
   // Avec le freinage inverse, une consigne nulle ne change pas le sens : l'impulsion de freinage doit
   // aller à l'opposé du sens de rotation.
@@ -152,6 +152,12 @@ void PilotageMoteur<pinCodeur>::execute() {
     termineFreinage();
   if (m_EnFreinage)
     analogWrite(m_PinVitesseMoteur, m_CommandeFreinage);
+  else if (m_ConsigneVitesseMoteur == 0) {
+    // Consigne nulle sans freinage : roue libre, et on repart d'un PID vierge (pas de reste d'intégrale)
+    m_CommandeMoteur = 0;
+    reinitialisePID();
+    analogWrite(m_PinVitesseMoteur, 0);
+  }
   else {
     PID_moteur.Compute();
     analogWrite(m_PinVitesseMoteur, m_CommandeMoteur);
@@ -187,6 +193,9 @@ void PilotageMoteur<pinCodeur>::routineInterruptionCodeur(void) {
 //**********************************************************************
 template <int pinCodeur>
 void PilotageMoteur<pinCodeur>::demarreFreinage(void) {
+  // Roue arrêtée : plus d'impulsion du codeur depuis plus de deux périodes, la vitesse mesurée est périmée.
+  if ((micros() - m_Date_derniere_impulsion_codeur) > 2 * m_Duree_impulsion_codeur)
+    return;
   // Le codeur ne donne pas le sens : on suppose que le moteur tourne dans le sens de la dernière consigne.
   if (m_VitesseMoteurMesuree < FREINAGE_VITESSE_MINIMUM)
     return;
@@ -203,8 +212,14 @@ void PilotageMoteur<pinCodeur>::demarreFreinage(void) {
 template <int pinCodeur>
 void PilotageMoteur<pinCodeur>::termineFreinage(void) {
   m_EnFreinage = false;
+  reinitialisePID();
+}
+//**********************************************************************
+template <int pinCodeur>
+void PilotageMoteur<pinCodeur>::reinitialisePID(void) {
+  // Le passage manuel -> automatique réinitialise le PID à partir de la commande : terme intégral remis à 0
   m_CommandeMoteur = 0;
-  // Le passage en automatique initialise le PID a partir de la commande (terme intégral remis à 0)
+  PID_moteur.SetMode(MANUAL);
   PID_moteur.SetMode(AUTOMATIC);
 }
 //**********************************************************************************************
