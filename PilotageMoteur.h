@@ -16,7 +16,7 @@
 // Vitesse (unité de get_VitesseRotation) en dessous de laquelle on ne freine pas.
 #define FREINAGE_VITESSE_MINIMUM    1.0
 // Vitesse (unité de get_VitesseRotation) à partir de laquelle l'impulsion est maximale.
-#define FREINAGE_VITESSE_REFERENCE  255.0
+#define FREINAGE_VITESSE_REFERENCE  100.0
 // Commande PWM maximale de l'impulsion de freinage (0-255).
 #define FREINAGE_COMMANDE_MAX       255
 // Durée maximale de l'impulsion de freinage (µs).

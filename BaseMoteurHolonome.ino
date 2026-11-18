@@ -164,6 +164,8 @@ void setup() {
   moteur_gauche.set_FreinageInverse(true);
   moteur_arriere.set_FreinageInverse(true);
 
+  moteur_droit.set_DebugMode(true);
+
   if (DEBUG) Serial.println("Initialisation OK !");
 }
 
