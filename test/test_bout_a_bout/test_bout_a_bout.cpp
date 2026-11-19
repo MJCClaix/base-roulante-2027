@@ -135,6 +135,21 @@ class BaseRoulanteTest : public ::testing::Test {
 
   static int pwm(uint8_t broche) { return etat.analogique[broche]; }
 
+  // Remet la base dans son état de démarrage, avec la variante 'graine' des moteurs simulés.
+  void reinitialiser_variante(unsigned graine) {
+    etat.reinitialiser_broches();
+    remettre_regulation_a_zero();
+    droit = MoteurSimule(PIN_VITESSE_MOTEUR_DROIT, PIN_SENS_MOTEUR_DROIT, PIN_CODEUR_MOTEUR_DROIT, POLARITE_DROIT,
+                         8.0, 0.15, graine);
+    gauche = MoteurSimule(PIN_VITESSE_MOTEUR_GAUCHE, PIN_SENS_MOTEUR_GAUCHE, PIN_CODEUR_MOTEUR_GAUCHE,
+                          POLARITE_GAUCHE, 8.0, 0.15, graine);
+    arriere = MoteurSimule(PIN_VITESSE_MOTEUR_ARRIERE, PIN_SENS_MOTEUR_ARRIERE, PIN_CODEUR_MOTEUR_ARRIERE,
+                           POLARITE_ARRIERE, 8.0, 0.15, graine);
+  }
+
+  // Niveau attendu de la broche de sens pour une consigne non nulle (cf. set_ConsigneVitesse et setup()).
+  static int niveau_sens(float consigne, bool inverse) { return (consigne > 0) != inverse; }
+
   MoteurSimule droit, gauche, arriere;
 };
 
@@ -256,7 +271,8 @@ TEST_F(BaseRoulanteTest, RelachementDesManches_LaPuissanceRetombeEtLaRoueRalenti
   piloter(Pulses{});
   for (int ms = 0; ms < 3000; ++ms) {
     pas();
-    ASSERT_LE(pwm(PIN_VITESSE_MOTEUR_GAUCHE), commande_initiale) << "t=" << ms << " ms";
+    // L'anti-rebond (20 ms) maintient la commande précédente : une petite dérive est tolérée au début
+    ASSERT_LE(pwm(PIN_VITESSE_MOTEUR_GAUCHE), commande_initiale + 2) << "t=" << ms << " ms";
   }
   EXPECT_EQ(pwm(PIN_VITESSE_MOTEUR_DROIT), 0);
   EXPECT_EQ(pwm(PIN_VITESSE_MOTEUR_GAUCHE), 0);
@@ -274,22 +290,34 @@ TEST_F(BaseRoulanteTest, RelachementDesManches_ImpulsionDeFreinageInverseRalenti
   regler_moteurs_pour(consignes_attendues());
   executer_ms(8000);
   const double vitesse_initiale = gauche.vitesse();
-  ASSERT_GT(vitesse_initiale, 10 * FREINAGE_VITESSE_MINIMUM) << "le moteur doit tourner avant le relâchement";
+  ASSERT_GT(vitesse_initiale, 5.0) << "le moteur doit tourner avant le relâchement";
   const int sens_avant = etat.numerique[PIN_SENS_MOTEUR_GAUCHE];
 
   piloter(Pulses{});
-  pas();
-  EXPECT_NE(etat.numerique[PIN_SENS_MOTEUR_GAUCHE], sens_avant) << "l'impulsion doit être de sens opposé";
-  EXPECT_GT(pwm(PIN_VITESSE_MOTEUR_GAUCHE), 0);
-
-  int duree_ms = 1;
-  double vitesse_min = gauche.vitesse();
-  while (pwm(PIN_VITESSE_MOTEUR_GAUCHE) > 0 && duree_ms < 1000) {
+  // L'anti-rebond (20 ms) laisse passer un court délai avant le freinage
+  int attente = 0;
+  while (etat.numerique[PIN_SENS_MOTEUR_GAUCHE] == sens_avant && attente < 200) {
     pas();
-    ++duree_ms;
-    vitesse_min = std::min(vitesse_min, gauche.vitesse());
+    ++attente;
   }
-  EXPECT_LE(duree_ms * 1000.0, FREINAGE_DUREE_MAX + 2000) << "durée de l'impulsion";
+  EXPECT_NE(etat.numerique[PIN_SENS_MOTEUR_GAUCHE], sens_avant) << "l'impulsion doit être de sens opposé";
+
+  // Durée de l'impulsion : du premier cycle avec PWM > 0 jusqu'à son extinction
+  int duree_ms = 0;
+  bool demarree = false;
+  double vitesse_min = gauche.vitesse();
+  for (int i = 0; i < 300; ++i) {
+    pas();
+    vitesse_min = std::min(vitesse_min, gauche.vitesse());
+    if (pwm(PIN_VITESSE_MOTEUR_GAUCHE) > 0) {
+      demarree = true;
+      ++duree_ms;
+    } else if (demarree) {
+      break;
+    }
+  }
+  EXPECT_TRUE(demarree) << "l'impulsion doit avoir une PWM non nulle";
+  EXPECT_LE(duree_ms, FREINAGE_DUREE_MAX / 1000 + 5) << "durée de l'impulsion";
   EXPECT_LT(gauche.vitesse(), 0.5 * vitesse_initiale) << "la roue doit être largement ralentie";
   EXPECT_GT(vitesse_min, -0.25 * vitesse_initiale) << "la roue ne doit pas repartir franchement à l'envers";
 
@@ -328,6 +356,175 @@ TEST_F(BaseRoulanteTest, ChangementDeManoeuvre_LaRoueArriereNeFreinePasQuandSaCo
   executer_ms(300);
   EXPECT_EQ(etat.numerique[PIN_SENS_MOTEUR_ARRIERE], sens_avant) << "la roue arrière ne doit pas être freinée";
   verifier_commandes_dans_les_bornes();
+}
+
+// ------------------------------------------------------------------------------------------------
+// Trajectoires : on vérifie ce qui se passe PENDANT une manœuvre (sens, PWM, vitesse, ms par ms),
+// sur toutes les variantes du moteur simulé. Chaque test correspond à un symptôme observé sur le robot
+// (voir TODO.md). Certains échouent tant que les corrections de la TODO ne sont pas faites.
+
+// Sens attendus des trois broches pour une consigne non nulle (setup() inverse les moteurs droit et gauche).
+constexpr bool INVERSE_DROIT = true;
+constexpr bool INVERSE_GAUCHE = true;
+constexpr bool INVERSE_ARRIERE = false;
+
+TEST_F(BaseRoulanteTest, EnConduite_LeSensNeChangePasTantQueLOrdreNeChangePas) {
+  // Symptôme : « il freinait alors que je voulais avancer ». Un freinage en conduite inverserait le sens.
+  for (unsigned graine : simulation::GRAINES) {
+    SCOPED_TRACE("graine " + std::to_string(graine));
+    reinitialiser_variante(graine);
+    piloter(Pulses{1700, PULSE_NEUTRE, PULSE_NEUTRE});
+    regler_moteurs_pour(consignes_attendues());
+    executer_ms(1500);
+    const int sens_droit = etat.numerique[PIN_SENS_MOTEUR_DROIT];
+    const int sens_gauche = etat.numerique[PIN_SENS_MOTEUR_GAUCHE];
+    const int sens_arriere = etat.numerique[PIN_SENS_MOTEUR_ARRIERE];
+    for (int ms = 0; ms < 3000; ++ms) {
+      pas();
+      ASSERT_EQ(etat.numerique[PIN_SENS_MOTEUR_DROIT], sens_droit) << "t=" << ms << " ms";
+      ASSERT_EQ(etat.numerique[PIN_SENS_MOTEUR_GAUCHE], sens_gauche) << "t=" << ms << " ms";
+      ASSERT_EQ(etat.numerique[PIN_SENS_MOTEUR_ARRIERE], sens_arriere) << "t=" << ms << " ms";
+    }
+  }
+}
+
+TEST_F(BaseRoulanteTest, ClignotementANeutre_UnInstantNeDoitPasFreiner) {
+  // Symptôme : freinage parasite. Un seul cycle à zéro (bruit du récepteur près de la zone morte) ne doit
+  // pas déclencher d'impulsion de freinage en plein mouvement.
+  for (unsigned graine : simulation::GRAINES) {
+    SCOPED_TRACE("graine " + std::to_string(graine));
+    reinitialiser_variante(graine);
+    piloter(Pulses{1700, PULSE_NEUTRE, PULSE_NEUTRE});
+    regler_moteurs_pour(consignes_attendues());
+    executer_ms(1500);
+    const int sens_droit = etat.numerique[PIN_SENS_MOTEUR_DROIT];
+    const int sens_gauche = etat.numerique[PIN_SENS_MOTEUR_GAUCHE];
+
+    const int pwm_avant = pwm(PIN_VITESSE_MOTEUR_GAUCHE);
+    piloter(Pulses{});
+    pas();  // un seul cycle à neutre
+    // Pendant ce cycle, aucune roue ne doit être freinée : ni sens inversé, ni saut de PWM (un freinage
+    // met la PWM à 255 d'un coup, alors que la régulation ne peut pas monter de plus de quelques unités en 1 ms)
+    ASSERT_EQ(etat.numerique[PIN_SENS_MOTEUR_DROIT], sens_droit) << "sens inversé pendant le cycle à neutre";
+    ASSERT_EQ(etat.numerique[PIN_SENS_MOTEUR_GAUCHE], sens_gauche) << "sens inversé pendant le cycle à neutre";
+    ASSERT_LE(pwm(PIN_VITESSE_MOTEUR_GAUCHE), pwm_avant + 1) << "saut de PWM pendant le cycle à neutre";
+    piloter(Pulses{1700, PULSE_NEUTRE, PULSE_NEUTRE});
+    for (int ms = 0; ms < 1500; ++ms) {
+      pas();
+      ASSERT_EQ(etat.numerique[PIN_SENS_MOTEUR_DROIT], sens_droit) << "t=" << ms << " ms après le clignotement";
+      ASSERT_EQ(etat.numerique[PIN_SENS_MOTEUR_GAUCHE], sens_gauche) << "t=" << ms << " ms après le clignotement";
+    }
+  }
+}
+
+TEST_F(BaseRoulanteTest, Relachement_LImpulsionDeFreinageNeFaitPasDeSaccade) {
+  // Symptôme : « le freinage saccade ». La PWM ne doit pas sauter brutalement d'une valeur à l'autre.
+  constexpr int SAUT_MAX = 50;  // PWM par ms : arbitraire, à valider sur le robot
+  for (unsigned graine : simulation::GRAINES) {
+    SCOPED_TRACE("graine " + std::to_string(graine));
+    reinitialiser_variante(graine);
+    piloter(Pulses{1700, PULSE_NEUTRE, PULSE_NEUTRE});
+    regler_moteurs_pour(consignes_attendues());
+    executer_ms(3000);
+
+    piloter(Pulses{});
+    int precedente = pwm(PIN_VITESSE_MOTEUR_GAUCHE);
+    for (int ms = 0; ms < 300; ++ms) {
+      pas();
+      const int courante = pwm(PIN_VITESSE_MOTEUR_GAUCHE);
+      // Seules les hausses sont limitées : une baisse (coupure, début du freinage) ne donne pas de coup
+      ASSERT_LE(courante - precedente, SAUT_MAX) << "saut brutal à t=" << ms << " ms";
+      precedente = courante;
+    }
+    verifier_commandes_dans_les_bornes();
+  }
+}
+
+TEST_F(BaseRoulanteTest, ApresLeFreinage_LaBaseResteImmobileSansRepartir) {
+  // Symptôme : « après le freinage le robot fait n'importe quoi pendant une seconde ».
+  // Une fois le freinage terminé, sans commande : aucune PWM, aucun retour en arrière, vitesse quasi nulle.
+  for (unsigned graine : simulation::GRAINES) {
+    SCOPED_TRACE("graine " + std::to_string(graine));
+    reinitialiser_variante(graine);
+    piloter(Pulses{1700, PULSE_NEUTRE, PULSE_NEUTRE});
+    regler_moteurs_pour(consignes_attendues());
+    executer_ms(3000);
+    const double vitesse_initiale = gauche.vitesse();
+    ASSERT_GT(vitesse_initiale, 0.5) << "le moteur doit tourner avant le relâchement";
+    const double sens_vitesse = vitesse_initiale > 0 ? 1.0 : -1.0;
+
+    piloter(Pulses{});
+    executer_ms(FREINAGE_DUREE_MAX / 1000 + 100);  // le freinage (au plus FREINAGE_DUREE_MAX) est terminé
+    for (int ms = 0; ms < 1000; ++ms) {
+      pas();
+      ASSERT_EQ(pwm(PIN_VITESSE_MOTEUR_DROIT), 0) << "t=" << ms << " ms après le freinage";
+      ASSERT_EQ(pwm(PIN_VITESSE_MOTEUR_GAUCHE), 0) << "t=" << ms << " ms après le freinage";
+      ASSERT_EQ(pwm(PIN_VITESSE_MOTEUR_ARRIERE), 0) << "t=" << ms << " ms après le freinage";
+      ASSERT_GE(gauche.vitesse() * sens_vitesse, -0.5) << "la roue repart en arrière, t=" << ms << " ms";
+    }
+    EXPECT_LT(std::fabs(gauche.vitesse()), 0.05 * vitesse_initiale);
+  }
+}
+
+TEST_F(BaseRoulanteTest, SuiteDeManoeuvres_LeSensSuitLOrdreSansFreinageParasite) {
+  // Séquences aléatoires (reproductibles) de manœuvres : à chaque instant, une roue à consigne non nulle
+  // doit avoir le sens de sa consigne, et la PWM reste dans les bornes.
+  const Pulses manoeuvres[] = {
+      Pulses{}, Pulses{1700, PULSE_NEUTRE, PULSE_NEUTRE}, Pulses{1300, PULSE_NEUTRE, PULSE_NEUTRE},
+      Pulses{PULSE_NEUTRE, 1700, PULSE_NEUTRE}, Pulses{PULSE_NEUTRE, 1300, PULSE_NEUTRE},
+      Pulses{PULSE_NEUTRE, PULSE_NEUTRE, 1700}, Pulses{PULSE_NEUTRE, PULSE_NEUTRE, 1300},
+      Pulses{1700, 1700, PULSE_NEUTRE}};
+  constexpr int NB_MANOEUVRES = 8;
+  for (unsigned graine : simulation::GRAINES) {
+    SCOPED_TRACE("graine " + std::to_string(graine));
+    reinitialiser_variante(graine);
+    unsigned tirage_etat = graine * 7919u;
+    for (int etape = 0; etape < 20; ++etape) {
+      const Pulses choix = manoeuvres[static_cast<int>(simulation::tirage(tirage_etat) * (NB_MANOEUVRES - 1) + 0.5)];
+      piloter(choix);
+      regler_moteurs_pour(consignes_attendues());
+      const Consignes c = consignes_attendues();
+      // Après 100 ms (régime de transition passé), le sens de chaque roue à consigne non nulle doit suivre la consigne
+      for (int ms = 0; ms < 300; ++ms) {
+        pas();
+        if (ms < 100) continue;
+        if (c.droit != 0)
+          ASSERT_EQ(etat.numerique[PIN_SENS_MOTEUR_DROIT], niveau_sens(c.droit, INVERSE_DROIT))
+              << "étape " << etape << ", t=" << ms << " ms, roue droite";
+        if (c.gauche != 0)
+          ASSERT_EQ(etat.numerique[PIN_SENS_MOTEUR_GAUCHE], niveau_sens(c.gauche, INVERSE_GAUCHE))
+              << "étape " << etape << ", t=" << ms << " ms, roue gauche";
+        if (c.arriere != 0)
+          ASSERT_EQ(etat.numerique[PIN_SENS_MOTEUR_ARRIERE], niveau_sens(c.arriere, INVERSE_ARRIERE))
+              << "étape " << etape << ", t=" << ms << " ms, roue arrière";
+      }
+      verifier_commandes_dans_les_bornes();
+    }
+  }
+}
+
+TEST_F(BaseRoulanteTest, Freinage_LaRoueNeRepartPasEnArriere) {
+  // Le codeur ne donne pas le sens : la roue ne doit jamais repartir franchement en arrière pendant le
+  // freinage, sur toutes les variantes du moteur (seuil d'arrêt et détection d'inversion).
+  for (unsigned graine : simulation::GRAINES) {
+    SCOPED_TRACE("graine " + std::to_string(graine));
+    reinitialiser_variante(graine);
+    piloter(Pulses{PULSE_MAXIMUM, PULSE_NEUTRE, PULSE_NEUTRE});
+    regler_moteurs_pour(consignes_attendues());
+    executer_ms(8000);
+    const double vitesse_initiale = gauche.vitesse();
+    ASSERT_GT(vitesse_initiale, 5.0) << "le moteur doit tourner avant le relâchement";
+
+    piloter(Pulses{});
+    double vitesse_min = vitesse_initiale;
+    for (int ms = 0; ms < 1000; ++ms) {
+      pas();
+      vitesse_min = std::min(vitesse_min, gauche.vitesse());
+    }
+    EXPECT_GT(vitesse_min, -0.05 * vitesse_initiale) << "la roue repart en arrière";
+    EXPECT_EQ(pwm(PIN_VITESSE_MOTEUR_GAUCHE), 0) << "le freinage doit être terminé";
+    verifier_commandes_dans_les_bornes();
+  }
 }
 
 }  // namespace

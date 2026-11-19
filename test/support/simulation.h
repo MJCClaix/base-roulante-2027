@@ -17,6 +17,16 @@ constexpr double IMPULSIONS_PAR_TOUR = 11.0;
 
 constexpr unsigned long PAS_US = 1000;  // pas de simulation : 1 ms
 
+// Graines utilisées pour rejouer un même scénario sur plusieurs variantes du moteur (voir MoteurSimule).
+// Un test ne doit pas passer par chance : il doit passer pour toutes ces graines.
+inline constexpr unsigned GRAINES[] = {1, 2, 3, 4, 5, 6};
+
+// Tirage pseudo-aléatoire reproductible dans [0, 1].
+inline double tirage(unsigned& etat) {
+  etat = etat * 1103515245u + 12345u;
+  return ((etat >> 16) & 0x7fff) / 32767.0;
+}
+
 inline void avancer_horloge(unsigned long dt_us) { arduino_fake::etat.horloge_us += dt_us; }
 
 // Moteur à courant continu + codeur simulés.
@@ -29,10 +39,18 @@ inline void avancer_horloge(unsigned long dt_us) { arduino_fake::etat.horloge_us
 // dans le sens contraire pour le même niveau de la broche de sens.
 class MoteurSimule {
  public:
+  // 'graine' non nulle : variante reproductible du moteur (inertie ±20 %, vitesse max ±10 %, phase du codeur).
   MoteurSimule(uint8_t pin_pwm, uint8_t pin_sens, uint8_t pin_codeur, int polarite,
-               double vitesse_max_tr_s, double constante_temps_s = 0.15)
+               double vitesse_max_tr_s, double constante_temps_s = 0.15, unsigned graine = 0)
       : m_pin_pwm(pin_pwm), m_pin_sens(pin_sens), m_pin_codeur(pin_codeur), m_polarite(polarite),
-        m_vitesse_max(vitesse_max_tr_s), m_tau(constante_temps_s) {}
+        m_vitesse_max(vitesse_max_tr_s), m_tau(constante_temps_s) {
+    if (graine != 0) {
+      unsigned etat = graine;
+      m_tau *= 0.8 + 0.4 * tirage(etat);
+      m_vitesse_max *= 0.9 + 0.2 * tirage(etat);
+      m_phase = tirage(etat);
+    }
+  }
 
   // À appeler après avoir avancé l'horloge de dt_us.
   void avancer(unsigned long dt_us) {

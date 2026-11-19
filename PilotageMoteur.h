@@ -11,16 +11,26 @@
 #define TIMEOUT_CODEUR_MOTEURS    10000
 // Periode d'écriture sur la liaison série en mode debug (µs)
 #define PERIODE_ECRITURE_LS 20000
-// Freinage par impulsion inverse (a regler sur le robot). La force et la durée de l'impulsion sont
-// proportionnelles à la vitesse mesurée quand la consigne passe à 0, jusqu'à FREINAGE_VITESSE_REFERENCE.
-// Vitesse (unité de get_VitesseRotation) en dessous de laquelle on ne freine pas.
-#define FREINAGE_VITESSE_MINIMUM    1.0
-// Vitesse (unité de get_VitesseRotation) à partir de laquelle l'impulsion est maximale.
+// Freinage inverse en boucle fermée (a regler sur le robot) : quand la consigne passe à 0, la PWM de freinage
+// suit la vitesse mesurée. Elle diminue donc à mesure que la roue ralentit, et s'arrête quand la roue est arrêtée.
+// Vitesse (unité de get_VitesseRotation) à partir de laquelle la PWM de freinage est maximale.
 #define FREINAGE_VITESSE_REFERENCE  100.0
-// Commande PWM maximale de l'impulsion de freinage (0-255).
+// Commande PWM maximale de freinage (0-255).
 #define FREINAGE_COMMANDE_MAX       255
-// Durée maximale de l'impulsion de freinage (µs).
-#define FREINAGE_DUREE_MAX          50000
+// PWM de freinage par unité de vitesse mesurée.
+#define FREINAGE_GAIN              (FREINAGE_COMMANDE_MAX / FREINAGE_VITESSE_REFERENCE)
+// Durée maximale d'un freinage (µs) : sécurité si la mesure est incohérente.
+#define FREINAGE_DUREE_MAX          300000
+// Vitesse (unité de get_VitesseRotation) sous laquelle le freinage s'arrête : la roue est considérée arrêtée.
+// Ce seuil ne sert qu'à arrêter le freinage, jamais à le déclencher.
+#define FREINAGE_VITESSE_ARRET      2.0
+// Nombre de mesures de suite sans baisse de vitesse qui signalent une inversion du sens.
+#define FREINAGE_MESURES_INVERSION  3
+// Hausse maximale de la commande PWM écrite par période de régulation (PID_SampleTime, 20 ms).
+// Évite les coups brutaux à la reprise. 255 désactive la limitation.
+#define PENTE_COMMANDE_MAX          10
+// Montée de l'impulsion de freinage (PWM par ms) : 255 est atteint en environ 10 ms.
+#define FREINAGE_MONTEE_PAR_MS      25.0
 
 //--------------------------------------------------------------------------------------------------------------------
 template <int pinCodeur> class PilotageMoteur {
@@ -47,9 +57,12 @@ template <int pinCodeur> class PilotageMoteur {
     bool m_DemandeFreinage = false;
     bool m_EnFreinage = false;
     bool m_SensRotation = true;   // sens de la dernière consigne non nulle
-    int m_CommandeFreinage = 0;
     unsigned long m_DateDebutFreinage = 0;
     unsigned long m_DureeFreinage = 0;
+    double m_CommandeAppliquee = 0;   // valeur réellement écrite sur la PWM (après limitation de pente)
+    unsigned long m_DateCommandeAppliquee = 0;
+    double m_HistoriqueFreinage[FREINAGE_MESURES_INVERSION];  // dernières mesures pendant le freinage (la plus ancienne en 0)
+    unsigned long m_DateMesureFreinage = 0;       // date de la mesure correspondante
 
     static int             m_Compteur_impulsions_codeur;
     static unsigned long   m_Duree_impulsion_codeur;
@@ -75,6 +88,7 @@ template <int pinCodeur> class PilotageMoteur {
     void demarreFreinage(void);
     void termineFreinage(void);
     void reinitialisePID(void);
+    void appliqueCommande(double commande);
 };
 
 //--------------------------------------------------------------------------------------------------------------------
@@ -148,19 +162,48 @@ void PilotageMoteur<pinCodeur>::execute() {
     if (m_FreinageInverse)
       demarreFreinage();
   }
-  if (m_EnFreinage && ((micros() - m_DateDebutFreinage) >= m_DureeFreinage))
-    termineFreinage();
-  if (m_EnFreinage)
-    analogWrite(m_PinVitesseMoteur, m_CommandeFreinage);
-  else if (m_ConsigneVitesseMoteur == 0) {
-    // Consigne nulle sans freinage : roue libre, et on repart d'un PID vierge (pas de reste d'intégrale)
-    m_CommandeMoteur = 0;
-    reinitialisePID();
-    analogWrite(m_PinVitesseMoteur, 0);
+  if (m_EnFreinage) {
+    // Le codeur ne donne pas le sens : on ne sait pas si la roue a changé de sens. On arrête donc le freinage :
+    //  - quand la roue est proche de l'arrêt (seuil bas, fin de freinage seulement) ;
+    //  - quand une nouvelle mesure n'a pas diminué : le freinage étant fort, la roue a probablement inversé ;
+    //  - si la roue est arrêtée (plus d'impulsion du codeur), ou si la durée de sécurité est dépassée.
+    const unsigned long maintenant = micros();
+    const bool roue_arretee = (maintenant - m_Date_derniere_impulsion_codeur) > 2 * m_Duree_impulsion_codeur;
+    const bool duree_depassee = (maintenant - m_DateDebutFreinage) >= m_DureeFreinage;
+    const bool presque_arretee = m_VitesseMoteurMesuree < FREINAGE_VITESSE_ARRET;
+    bool inversion = false;
+    if (m_Date_derniere_impulsion_codeur != m_DateMesureFreinage) {
+      // Nouvelle mesure depuis le cycle précédent
+      // Comparaison à la mesure de FREINAGE_MESURES_INVERSION mesures plus tôt : une vitesse qui n'a pas baissé
+      // pendant tout ce temps indique une inversion (la comparaison à la mesure précédente serait sensible à l'arrondi)
+      inversion = (m_VitesseMoteurMesuree >= m_HistoriqueFreinage[0]);
+      for (int i = 0; i < FREINAGE_MESURES_INVERSION - 1; ++i)
+        m_HistoriqueFreinage[i] = m_HistoriqueFreinage[i + 1];
+      m_HistoriqueFreinage[FREINAGE_MESURES_INVERSION - 1] = m_VitesseMoteurMesuree;
+      m_DateMesureFreinage = m_Date_derniere_impulsion_codeur;
+    }
+    if (roue_arretee || duree_depassee || presque_arretee || inversion)
+      termineFreinage();
+  }
+  if (m_EnFreinage) {
+    // Freinage en boucle fermée : la PWM suit la vitesse mesurée. Elle monte doucement au départ (pas de saut),
+    // puis diminue avec la vitesse (pas de coupure brutale).
+    const unsigned long maintenant = micros();
+    const double cible = min(FREINAGE_GAIN * m_VitesseMoteurMesuree, (double)FREINAGE_COMMANDE_MAX);
+    const double montee = FREINAGE_MONTEE_PAR_MS * (maintenant - m_DateCommandeAppliquee) / 1000.0;
+    m_DateCommandeAppliquee = maintenant;
+    m_CommandeAppliquee = min(cible, m_CommandeAppliquee + montee);
+    analogWrite(m_PinVitesseMoteur, m_CommandeAppliquee);
   }
   else {
-    PID_moteur.Compute();
-    analogWrite(m_PinVitesseMoteur, m_CommandeMoteur);
+    if (m_ConsigneVitesseMoteur == 0) {
+      // Consigne nulle sans freinage : roue libre, et on repart d'un PID vierge (pas de reste d'intégrale)
+      m_CommandeMoteur = 0;
+      reinitialisePID();
+    }
+    else
+      PID_moteur.Compute();
+    appliqueCommande(m_CommandeMoteur);
   }
   if (m_debug_mode) {
     unsigned long date_courante = micros();
@@ -197,12 +240,15 @@ void PilotageMoteur<pinCodeur>::demarreFreinage(void) {
   if ((micros() - m_Date_derniere_impulsion_codeur) > 2 * m_Duree_impulsion_codeur)
     return;
   // Le codeur ne donne pas le sens : on suppose que le moteur tourne dans le sens de la dernière consigne.
-  if (m_VitesseMoteurMesuree < FREINAGE_VITESSE_MINIMUM)
-    return;
-  double ratio = min(m_VitesseMoteurMesuree / FREINAGE_VITESSE_REFERENCE, 1.0);
-  m_CommandeFreinage = FREINAGE_COMMANDE_MAX * ratio;
-  m_DureeFreinage = FREINAGE_DUREE_MAX * ratio;
+  // Pas de seuil de vitesse : à basse vitesse la PWM de freinage est naturellement faible.
+  m_DureeFreinage = FREINAGE_DUREE_MAX;
   m_DateDebutFreinage = micros();
+  for (int i = 0; i < FREINAGE_MESURES_INVERSION; ++i)
+    m_HistoriqueFreinage[i] = m_VitesseMoteurMesuree;
+  m_DateMesureFreinage = m_Date_derniere_impulsion_codeur;
+  // La PWM part de 0 (roue libre) avant de monter : l'inversion du sens ne se fait pas à pleine puissance
+  m_CommandeAppliquee = 0;
+  m_DateCommandeAppliquee = m_DateDebutFreinage;
   m_EnFreinage = true;
   PID_moteur.SetMode(MANUAL);
   // Impulsion dans le sens opposé à la rotation
@@ -212,7 +258,25 @@ void PilotageMoteur<pinCodeur>::demarreFreinage(void) {
 template <int pinCodeur>
 void PilotageMoteur<pinCodeur>::termineFreinage(void) {
   m_EnFreinage = false;
+  // La commande suivante part de 0 : elle ne reprend pas la valeur (et le sens) de l'impulsion de freinage
+  m_CommandeAppliquee = 0;
   reinitialisePID();
+}
+//**********************************************************************
+template <int pinCodeur>
+void PilotageMoteur<pinCodeur>::appliqueCommande(double commande) {
+  // Limitation de pente sur la HAUSSE seulement : c'est elle qui donne les coups. Une baisse de PWM
+  // (coupure, relâchement) n'en donne pas : la roue roule libre.
+  // La pente est exprimée par période de régulation, pour ne pas dépendre de la cadence de loop().
+  const unsigned long maintenant = micros();
+  const unsigned long ecoule = min(maintenant - m_DateCommandeAppliquee, (unsigned long)(m_PID_SampleTime * 1000));
+  m_DateCommandeAppliquee = maintenant;
+  const double hausse_max = PENTE_COMMANDE_MAX * ecoule / (double)(m_PID_SampleTime * 1000);
+  if (commande > m_CommandeAppliquee)
+    m_CommandeAppliquee = min(commande, m_CommandeAppliquee + hausse_max);
+  else
+    m_CommandeAppliquee = commande;
+  analogWrite(m_PinVitesseMoteur, m_CommandeAppliquee);
 }
 //**********************************************************************
 template <int pinCodeur>

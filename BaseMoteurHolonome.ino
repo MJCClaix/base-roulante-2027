@@ -112,11 +112,34 @@ void calcule_consignes_moteurs(
 
 //--------------------------------------------------------------------------------------------------------------------
 
+// Durée (µs) pendant laquelle un passage à neutre est ignoré (anti-rebond du récepteur) avant de freiner
+#define DELAI_NEUTRE_AVANT_FREINAGE 20000
+
 bool base_immobile_precedente = true;
+bool neutre_precedent = false;
+unsigned long date_debut_neutre = 0;
+float consigne_droit_tenue = 0;
+float consigne_gauche_tenue = 0;
+float consigne_arriere_tenue = 0;
 
 void set_vitesse(float vitesse_moteur_droit, float vitesse_moteur_gauche, float vitesse_moteur_arriere) {
-  // Le freinage n'est demandé que lorsque toute la base s'arrête. Une roue dont la consigne est nulle
-  // pendant un déplacement (ex. roue arrière en translation) roule librement, elle n'est pas freinée.
+  // Anti-rebond : un bref passage à neutre garde la commande précédente. Le freinage ne se déclenche qu'après
+  // un neutre tenu, et la base ne freine pas quand une roue seule a une consigne nulle (roue arrière en translation).
+  const bool neutre = (vitesse_moteur_droit == 0 && vitesse_moteur_gauche == 0 && vitesse_moteur_arriere == 0);
+  if (neutre) {
+    if (!neutre_precedent)
+      date_debut_neutre = micros();
+    if ((micros() - date_debut_neutre) < DELAI_NEUTRE_AVANT_FREINAGE) {
+      vitesse_moteur_droit = consigne_droit_tenue;
+      vitesse_moteur_gauche = consigne_gauche_tenue;
+      vitesse_moteur_arriere = consigne_arriere_tenue;
+    }
+  }
+  neutre_precedent = neutre;
+  consigne_droit_tenue = vitesse_moteur_droit;
+  consigne_gauche_tenue = vitesse_moteur_gauche;
+  consigne_arriere_tenue = vitesse_moteur_arriere;
+
   const bool base_immobile = (vitesse_moteur_droit == 0 && vitesse_moteur_gauche == 0 && vitesse_moteur_arriere == 0);
 
   moteur_droit.set_ConsigneVitesse(vitesse_moteur_droit);
